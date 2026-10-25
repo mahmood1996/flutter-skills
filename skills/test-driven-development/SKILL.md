@@ -1,13 +1,13 @@
 ---
 name: test-driven-development
 description: "TDD: enforce RED-GREEN-REFACTOR, tests before code."
-version: 1.1.0
+version: 1.2.0
 author: Hermes Agent (adapted from obra/superpowers)
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: [testing, tdd, development, quality, red-green-refactor]
+    tags: [testing, tdd, development, quality, red-green-refactor, flutter, fakes]
     related_skills: [systematic-debugging, subagent-driven-development]
 ---
 
@@ -15,7 +15,7 @@ metadata:
 
 ## Overview
 
-Write the test first. Watch it fail. Write minimal code to pass.
+Write the test first. Watch it fail. Write minimal code to pass. Refactor. Then, and only then, the next test.
 
 **Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
 
@@ -31,26 +31,64 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 **Exceptions (ask the user first):**
 - Throwaway prototypes
-- Generated code
+- Generated code (`*.g.dart`)
 - Configuration files
 
 Thinking "skip TDD just this once"? Stop. That's rationalization.
 
-## The Iron Law
+## The Iron Laws
 
 ```
-NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
+1. NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
+2. ONE TEST AT A TIME: never write a second test until the first
+   one is green AND refactored
 ```
 
 Write code before the test? Delete it. Start over.
+Wrote several tests before the first implementation? Keep the first, delete the rest, and
+rewrite them one at a time later. The tests you delete will be better when you rewrite them,
+because the implementation will have taught you what matters.
 
 **No exceptions:**
-- Don't keep it as "reference"
+- Don't keep deleted code as "reference"
 - Don't "adapt" it while writing tests
 - Don't look at it
 - Delete means delete
 
 Implement fresh from tests. Period.
+
+## The Loop (one scenario or behavior per pass)
+
+```
+pick next behavior
+  -> RED:      write ONE test, run it, see it fail on the assertion
+  -> GREEN:    write minimal code, run it, see it pass, run the layer's tests
+  -> REFACTOR: clean up THIS behavior's code now, run the layer's tests again
+  -> next behavior
+```
+
+Refactor happens inside every pass, not at the end of a batch. "Refactor later, after all
+tests pass" is the horizontal-slice mistake in disguise.
+
+### Scenario status ledger
+
+If you are given a list of scenarios with a `status` field (for example a spec slice), the
+list is your ledger. Keep it truthful:
+
+```
+pending -> red -> green -> refactored
+```
+
+- Work only on the first `pending` scenario.
+- At most ONE scenario may be `red` or `green` at any moment. Every earlier scenario is
+  `refactored`, every later one is `pending`.
+- Update the status in the file right after the matching test run, never before it and
+  never in bulk.
+- `red` requires you to have seen the failing run. `green` requires you to have seen the
+  passing run. Keep the one failing output line for each scenario and include it in your report.
+- Do not open the next scenario while the current one is not `refactored`.
+
+No ledger given? Keep the same discipline with a plain list in your own notes.
 
 ## Red-Green-Refactor Cycle
 
@@ -58,38 +96,37 @@ Implement fresh from tests. Period.
 
 Write one minimal test showing what should happen.
 
-**Good test:**
-```python
-def test_retries_failed_operations_3_times():
-    attempts = 0
-    def operation():
-        nonlocal attempts
-        attempts += 1
-        if attempts < 3:
-            raise Exception('fail')
-        return 'success'
+**Good test** (London School: the unit under test, with a hand-written Fake for its direct collaborator):
+```dart
+test('returns the orders when the repository has orders', () async {
+  final repository = FakeOrderRepository(orders: [order]);
+  final useCase = GetOrders(repository);
 
-    result = retry_operation(operation)
+  final result = await useCase();
 
-    assert result == 'success'
-    assert attempts == 3
+  expect(result, Right<Failure, List<Order>>([order]));
+});
 ```
-Clear name, tests real behavior, one thing.
+Clear name, real unit under test, Fake seeded through the constructor, asserts the outcome.
 
 **Bad test:**
-```python
-def test_retry_works():
-    mock = MagicMock()
-    mock.side_effect = [Exception(), Exception(), 'success']
-    result = retry_operation(mock)
-    assert result == 'success'  # What about retry count? Timing?
+```dart
+test('works', () async {
+  final repository = MockOrderRepository();
+  when(() => repository.orders()).thenAnswer((_) async => Right([order]));
+  await GetOrders(repository)();
+  verify(() => repository.orders()).called(1);
+});
 ```
-Vague name, tests mock not real code.
+Vague name, mocking package, asserts the interaction instead of the outcome.
 
 **Requirements:**
 - One behavior per test
 - Clear descriptive name ("and" in name? Split it)
-- Real code, not mocks (unless truly unavoidable)
+- Collaborators are hand-written Fakes in `test/fakes/`; never a mocking package
+  (`mockito`, `mocktail`) and never interaction expectations like `verify(...)`
+- The unit under test is always the real code
+- Assert on outcomes and on what the Fake recorded (noun getters like `requests`, `callCount`)
 - Name describes behavior, not implementation
 
 ### Verify RED — Watch It Fail
@@ -97,36 +134,33 @@ Vague name, tests mock not real code.
 **MANDATORY. Never skip.**
 
 ```bash
-# Use terminal tool to run the specific test
-pytest tests/test_feature.py::test_specific_behavior -v
+# Run only the new test
+flutter test test/features/FEATURE/LAYER/NAME_test.dart --plain-name "test name"
 ```
 
 Confirm:
-- Test fails (not errors from typos)
-- Failure message is expected
-- Fails because the feature is missing
+- The test fails on the assertion
+- Failure message is the expected one
+- It fails because the behavior is missing
 
-**Test passes immediately?** You're testing existing behavior. Fix the test.
+**First test of a new unit does not compile?** That is the expected first RED. Create only the
+minimal stubs that fix the compile errors (class, signature, interface), then run again until
+it fails on the assertion. Do not implement behavior yet.
 
-**Test errors?** Fix the error, re-run until it fails correctly.
+**Test passes immediately?** You are testing existing behavior. Fix the test.
+
+**Test errors for a typo or setup mistake?** Fix the error, re-run until it fails correctly.
 
 ### GREEN — Minimal Code
 
 Write the simplest code to pass the test. Nothing more.
 
 **Good:**
-```python
-def add(a, b):
-    return a + b  # Nothing extra
+```dart
+Future<Either<Failure, List<Order>>> call() => repository.orders();
 ```
 
-**Bad:**
-```python
-def add(a, b):
-    result = a + b
-    logging.info(f"Adding {a} + {b} = {result}")  # Extra!
-    return result
-```
+**Bad:** adding caching, logging or error mapping that no test asked for.
 
 Don't add features, refactor other code, or "improve" beyond the test.
 
@@ -136,18 +170,18 @@ Don't add features, refactor other code, or "improve" beyond the test.
 - Duplicate code
 - Skip edge cases
 
-We'll fix it in REFACTOR.
+The next scenario forces the generalization, and REFACTOR cleans it up.
 
 ### Verify GREEN — Watch It Pass
 
 **MANDATORY.**
 
 ```bash
-# Run the specific test
-pytest tests/test_feature.py::test_specific_behavior -v
+# The new test
+flutter test test/features/FEATURE/LAYER/NAME_test.dart --plain-name "test name"
 
-# Then run ALL tests to check for regressions
-pytest tests/ -q
+# Then the whole layer, to check for regressions
+flutter test test/features/FEATURE/LAYER
 ```
 
 Confirm:
@@ -159,17 +193,20 @@ Confirm:
 
 **Other tests fail?** Fix regressions now.
 
-### REFACTOR — Clean Up
+### REFACTOR — Clean Up (every pass, before the next test)
 
-After green only:
+After green only, and only for the code this scenario touched:
 - Remove duplication
 - Improve names
 - Extract helpers
 - Simplify expressions
+- Simplify the Fake if it grew clever
 
-Keep tests green throughout. Don't add behavior.
+Run the layer's tests again. Keep tests green throughout. Don't add behavior.
 
 **If tests fail during refactor:** Undo immediately. Take smaller steps.
+
+Nothing to clean up? Say so and move on, but still run the tests.
 
 ### Repeat
 
@@ -177,116 +214,80 @@ Next failing test for next behavior. One cycle at a time.
 
 ## Avoid Horizontal Slices
 
-Do **not** write all tests first and then all implementation. That is horizontal slicing: RED becomes "write a pile of imagined tests" and GREEN becomes "make the pile pass." It produces brittle tests because the tests are designed before the implementation has taught you what behavior and interface actually matter.
-
-Use vertical tracer bullets instead:
+Do **not** write all tests first and then all implementation. That is horizontal slicing: RED
+becomes "write a pile of imagined tests" and GREEN becomes "make the pile pass." It produces
+brittle tests, because the tests are designed before the implementation has taught you what
+behavior and interface actually matter. Writing all the tests, making them all green, and
+refactoring at the end is the same mistake.
 
 ```text
 WRONG:
   RED:   test1, test2, test3, test4
   GREEN: impl1, impl2, impl3, impl4
+  REFACTOR: everything
 
 RIGHT:
-  RED→GREEN: test1→impl1
-  RED→GREEN: test2→impl2
-  RED→GREEN: test3→impl3
+  RED -> GREEN -> REFACTOR: test1 -> impl1 -> clean1
+  RED -> GREEN -> REFACTOR: test2 -> impl2 -> clean2
+  RED -> GREEN -> REFACTOR: test3 -> impl3 -> clean3
 ```
 
-A tracer bullet is one end-to-end behavior slice. It proves the path works, teaches you about the interface, and keeps each next test grounded in what you just learned.
-
-## Why Order Matters
-
-**"I'll write tests after to verify it works"**
-
-Tests written after code pass immediately. Passing immediately proves nothing:
-- Might test the wrong thing
-- Might test implementation, not behavior
-- Might miss edge cases you forgot
-- You never saw it catch the bug
-
-Test-first forces you to see the test fail, proving it actually tests something.
-
-**"I already manually tested all the edge cases"**
-
-Manual testing is ad-hoc. You think you tested everything but:
-- No record of what you tested
-- Can't re-run when code changes
-- Easy to forget cases under pressure
-- "It worked when I tried it" ≠ comprehensive
-
-Automated tests are systematic. They run the same way every time.
-
-**"Deleting X hours of work is wasteful"**
-
-Sunk cost fallacy. The time is already gone. Your choice now:
-- Delete and rewrite with TDD (high confidence)
-- Keep it and add tests after (low confidence, likely bugs)
-
-The "waste" is keeping code you can't trust.
-
-**"TDD is dogmatic, being pragmatic means adapting"**
-
-TDD IS pragmatic:
-- Finds bugs before commit (faster than debugging after)
-- Prevents regressions (tests catch breaks immediately)
-- Documents behavior (tests show how to use code)
-- Enables refactoring (change freely, tests catch breaks)
-
-"Pragmatic" shortcuts = debugging in production = slower.
-
-**"Tests after achieve the same goals — it's spirit not ritual"**
-
-No. Tests-after answer "What does this do?" Tests-first answer "What should this do?"
-
-Tests-after are biased by your implementation. You test what you built, not what's required. Tests-first force edge case discovery before implementing.
+A tracer bullet is one end-to-end behavior slice. It proves the path works, teaches you about
+the interface, and keeps each next test grounded in what you just learned.
 
 ## Common Rationalizations
 
 | Excuse | Reality |
 |--------|---------|
 | "Too simple to test" | Simple code breaks. Test takes 30 seconds. |
-| "I'll test after" | Tests passing immediately prove nothing. |
-| "Tests after achieve same goals" | Tests-after = "what does this do?" Tests-first = "what should this do?" |
-| "Already manually tested" | Ad-hoc ≠ systematic. No record, can't re-run. |
+| "I'll test after" | Tests passing immediately prove nothing. Tests-after answer "what does this do?", tests-first answer "what should this do?" |
+| "I'll write all the tests first, it's faster" | That is horizontal slicing. One test, one pass, then the next. |
+| "I'll refactor once everything is green" | Refactor now, per scenario. Late refactoring never happens or breaks everything at once. |
+| "Already manually tested" | Ad-hoc is not systematic. No record, can't re-run. |
 | "Deleting X hours is wasteful" | Sunk cost fallacy. Keeping unverified code is technical debt. |
 | "Keep as reference, write tests first" | You'll adapt it. That's testing after. Delete means delete. |
-| "Need to explore first" | Fine. Throw away exploration, start with TDD. |
+| "Need to explore first" | Fine. Throw away the exploration, start with TDD. |
 | "Test hard = design unclear" | Listen to the test. Hard to test = hard to use. |
-| "TDD will slow me down" | TDD faster than debugging. Pragmatic = test-first. |
-| "Manual test faster" | Manual doesn't prove edge cases. You'll re-test every change. |
+| "TDD will slow me down" | TDD is faster than debugging. |
 | "Existing code has no tests" | You're improving it. Add tests for the code you touch. |
+| "I'll update all the statuses at the end" | A status is a record of a run you just saw. Update it as you go. |
 
 ## Red Flags — STOP and Start Over
 
-If you catch yourself doing any of these, delete the code and restart with TDD:
+If you catch yourself doing any of these, delete the code (or the extra tests) and restart with TDD:
 
 - Code before test
 - Test after implementation
+- More than one new test in a single edit or before the first is green
+- More than one scenario in `red` or `green` at once
 - Test passes immediately on first run
 - Can't explain why test failed
+- Statuses changed without a test run just before
+- Refactoring postponed to "the end"
 - Tests added "later"
 - Rationalizing "just this once"
 - "I already manually tested it"
-- "Tests after achieve the same purpose"
 - "Keep as reference" or "adapt existing code"
 - "Already spent X hours, deleting is wasteful"
-- "TDD is dogmatic, I'm being pragmatic"
 - "This is different because..."
 
-**All of these mean: Delete code. Start over with TDD.**
+**All of these mean: delete the code or the extra tests. Start over with TDD.**
 
 ## Verification Checklist
 
 Before marking work complete:
 
 - [ ] Every new function/method has a test
+- [ ] Tests were written and run one at a time
 - [ ] Watched each test fail before implementing
-- [ ] Each test failed for expected reason (feature missing, not typo)
+- [ ] Each test failed for the expected reason (behavior missing, not typo)
 - [ ] Wrote minimal code to pass each test
+- [ ] Refactored after each green, not only at the end
 - [ ] All tests pass
 - [ ] Output pristine (no errors, warnings)
-- [ ] Tests use real code (mocks only if unavoidable)
+- [ ] Collaborators are hand-written Fakes, no mocking packages
 - [ ] Edge cases and errors covered
+- [ ] Every scenario in the ledger is `refactored`, each with a recorded failing output line
 
 Can't check all boxes? You skipped TDD. Start over.
 
@@ -296,8 +297,9 @@ Can't check all boxes? You skipped TDD. Start over.
 |---------|----------|
 | Don't know how to test | Write the wished-for API. Write the assertion first. Ask the user. |
 | Test too complicated | Design too complicated. Simplify the interface. |
-| Must mock everything | Code too coupled. Use dependency injection. |
+| Need to mock everything | Code too coupled. Use dependency injection and a small Fake. |
 | Test setup huge | Extract helpers. Still complex? Simplify the design. |
+| A Fake is getting clever | It should only do what the current scenarios need. Simplify it. |
 
 ## Hermes Agent Integration
 
@@ -306,34 +308,38 @@ Can't check all boxes? You skipped TDD. Start over.
 Use the `terminal` tool to run tests at each step:
 
 ```python
-# RED — verify failure
-terminal("pytest tests/test_feature.py::test_name -v")
+# RED: verify failure
+terminal('flutter test test/features/FEATURE/LAYER/NAME_test.dart --plain-name "test name"')
 
-# GREEN — verify pass
-terminal("pytest tests/test_feature.py::test_name -v")
+# GREEN: verify pass
+terminal('flutter test test/features/FEATURE/LAYER/NAME_test.dart --plain-name "test name"')
 
-# Full suite — verify no regressions
-terminal("pytest tests/ -q")
+# Layer: verify no regressions (after GREEN and again after REFACTOR)
+terminal("flutter test test/features/FEATURE/LAYER")
 ```
 
 ### With delegate_task
 
-When dispatching subagents for implementation, enforce TDD in the goal:
+A sub-agent may never read this skill, so put the loop in the context itself:
 
 ```python
 delegate_task(
-    goal="Implement [feature] using strict TDD",
+    goal="Implement [feature] using strict TDD, one scenario at a time",
     context="""
-    Follow test-driven-development skill:
-    1. Write failing test FIRST
-    2. Run test to verify it fails
-    3. Write minimal code to pass
-    4. Run test to verify it passes
-    5. Refactor if needed
-    6. Commit
+    LOOP (repeat per scenario, one at a time, in order):
+    1. Take the first scenario with status: pending. Only one scenario may be
+       red or green at a time.
+    2. Write exactly ONE test. Run it. It must fail on the assertion.
+       Set status: red and keep the one-line failing output.
+    3. Write the minimal code. Run that test. Set status: green.
+    4. Run the layer's tests. Refactor THIS scenario's code now. Run them again.
+       Set status: refactored.
+    5. Only then start the next scenario.
+    Never write a second test while a scenario is red or green.
+    Fakes are hand-written, in test/fakes/. No mocking packages.
 
-    Project test command: pytest tests/ -q
-    Project structure: [describe relevant files]
+    Project test command: flutter test test/features/FEATURE/LAYER
+    REPORT: every scenario with its one-line failing output from step 2.
     """,
     toolsets=['terminal', 'file']
 )
@@ -341,24 +347,24 @@ delegate_task(
 
 ### With systematic-debugging
 
-Bug found? Write failing test reproducing it. Follow TDD cycle. The test proves the fix and prevents regression.
+Bug found? Write a failing test reproducing it. Follow the TDD loop. The test proves the fix and prevents regression.
 
 Never fix bugs without a test.
 
 ## Testing Anti-Patterns
 
-- **Testing mock behavior instead of real behavior** — mocks should verify interactions, not replace the system under test
-- **Testing implementation details** — test behavior/results, not internal method calls
+- **Mocking packages and interaction expectations** — use hand-written Fakes and assert on outcomes
+- **Testing implementation details** — test behavior and results, not internal method calls
 - **Happy path only** — always test edge cases, errors, and boundaries
 - **Brittle tests** — tests should verify behavior, not structure; refactoring shouldn't break them
+- **Batching** — several tests (or several scenarios in progress) at once
 
 ## Final Rule
 
 ```
-Production code → test exists and failed first
-Otherwise → not TDD
+Production code -> a test exists and failed first
+One test at a time -> red, green, refactor, then the next
+Otherwise -> not TDD
 ```
 
 No exceptions without the user's explicit permission.
-
-
