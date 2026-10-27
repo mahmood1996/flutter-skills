@@ -1,7 +1,7 @@
 ---
 name: test-driven-development
 description: "TDD: enforce RED-GREEN-REFACTOR, tests before code."
-version: 1.2.0
+version: 1.3.0
 author: Hermes Agent (adapted from obra/superpowers)
 license: MIT
 platforms: [linux, macos, windows]
@@ -33,6 +33,8 @@ Write the test first. Watch it fail. Write minimal code to pass. Refactor. Then,
 - Throwaway prototypes
 - Generated code (`*.g.dart`)
 - Configuration files
+- Design-system tokens, assets and widget layout (verified by the fidelity check in
+  `figma-to-flutter`). Widget behavior (callbacks, enabled/loading states, semantics) is NOT exempt.
 
 Thinking "skip TDD just this once"? Stop. That's rationalization.
 
@@ -79,13 +81,19 @@ list is your ledger. Keep it truthful:
 pending -> red -> green -> refactored
 ```
 
+Each scenario also carries `red_output` (one failing line), `green_output` (one passing line)
+and `refactor_note` ("nothing to clean up" is a valid note).
+
 - Work only on the first `pending` scenario.
 - At most ONE scenario may be `red` or `green` at any moment. Every earlier scenario is
   `refactored`, every later one is `pending`.
 - Update the status in the file right after the matching test run, never before it and
   never in bulk.
 - `red` requires you to have seen the failing run. `green` requires you to have seen the
-  passing run. Keep the one failing output line for each scenario and include it in your report.
+  passing run. Keep the one failing and the one passing output line for each scenario and
+  include both in your report.
+- Never skip a step: `red -> refactored` is a violation. `green` is recorded on its own, with
+  its passing line, before the refactor pass starts.
 - Do not open the next scenario while the current one is not `refactored`.
 
 No ledger given? Keep the same discipline with a plain list in your own notes.
@@ -146,6 +154,9 @@ Confirm:
 **First test of a new unit does not compile?** That is the expected first RED. Create only the
 minimal stubs that fix the compile errors (class, signature, interface), then run again until
 it fails on the assertion. Do not implement behavior yet.
+
+A stub returns a wrong default value (an empty list, a `Left`, `0`). It never throws and has no
+logic, so the test fails on the assertion and not with an unexpected error.
 
 **Test passes immediately?** You are testing existing behavior. Fix the test.
 
@@ -263,6 +274,8 @@ If you catch yourself doing any of these, delete the code (or the extra tests) a
 - Test passes immediately on first run
 - Can't explain why test failed
 - Statuses changed without a test run just before
+- A status that skips a step (`red -> refactored`), or `green_output` missing
+- A stub that throws or contains logic
 - Refactoring postponed to "the end"
 - Tests added "later"
 - Rationalizing "just this once"
@@ -287,9 +300,23 @@ Before marking work complete:
 - [ ] Output pristine (no errors, warnings)
 - [ ] Collaborators are hand-written Fakes, no mocking packages
 - [ ] Edge cases and errors covered
-- [ ] Every scenario in the ledger is `refactored`, each with a recorded failing output line
+- [ ] Every scenario in the ledger is `refactored`, each with a recorded failing line,
+      a recorded passing line and a refactor note
 
 Can't check all boxes? You skipped TDD. Start over.
+
+## Fakes
+
+- Live in `test/fakes/NAME.dart`, one class per file, `final class FakeName implements Interface`.
+  Every interface is an `abstract interface class`, so `implements` always works.
+- Create a fake only when the first scenario needs it, with only the behaviors that scenario
+  needs. Grow it scenario by scenario, within the contract the spec lists under `fakes:`.
+- Seed data through constructor parameters. Configure failure through a constructor parameter or
+  a settable noun-named field (`failure`, `exception`), not a verb method.
+- Expose what it recorded through noun getters (`requests`, `callCount`, `savedNotes`).
+- Assert on outcomes and on what the fake recorded. No mocking packages, no interaction
+  expectations.
+- A fake contains no logic beyond what a scenario needs. If it gets clever, simplify it.
 
 ## When Stuck
 
@@ -329,17 +356,20 @@ delegate_task(
     LOOP (repeat per scenario, one at a time, in order):
     1. Take the first scenario with status: pending. Only one scenario may be
        red or green at a time.
-    2. Write exactly ONE test. Run it. It must fail on the assertion.
-       Set status: red and keep the one-line failing output.
-    3. Write the minimal code. Run that test. Set status: green.
-    4. Run the layer's tests. Refactor THIS scenario's code now. Run them again.
-       Set status: refactored.
+    2. Write exactly ONE test. Run it. It must fail on the assertion (a stub returns a
+       wrong default value, never throws, has no logic).
+       Set status: red and keep the one-line failing output as red_output.
+    3. Write the minimal code. Run that test. Set status: green and keep the
+       one-line passing output as green_output.
+    4. Run the layer's tests. Refactor THIS scenario's code now (or write
+       "nothing to clean up" in refactor_note). Run them again. Set status: refactored.
+       Never skip a status (no red -> refactored).
     5. Only then start the next scenario.
     Never write a second test while a scenario is red or green.
     Fakes are hand-written, in test/fakes/. No mocking packages.
 
     Project test command: flutter test test/features/FEATURE/LAYER
-    REPORT: every scenario with its one-line failing output from step 2.
+    REPORT: every scenario with its red_output from step 2 and green_output from step 3.
     """,
     toolsets=['terminal', 'file']
 )

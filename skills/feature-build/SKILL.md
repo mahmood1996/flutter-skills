@@ -1,326 +1,65 @@
 ---
 name: feature-build
-description: "Use when building a Flutter feature from an approved spec."
-version: 1.1.0
+description: "Use when asked to build a Flutter feature from a spec."
+version: 1.0.0
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: [flutter, tdd, clean-architecture, orchestration, fakes]
-    related_skills: [feature-spec, flutter-clean-architecture, test-driven-development, figma-to-flutter]
+    tags: [flutter, tdd, clean-architecture, fakes]
+    related_skills: [feature-spec, feature-design-system, feature-domain, feature-data, feature-presentation]
 ---
 
 # Feature Build
 
 ## Overview
 
-Implement an approved spec one layer at a time. Each layer is built test-first against
-**Fakes** of the layer below it, verified, and recorded before the next layer starts.
-The spec comes from the `feature-spec` skill.
-
-**Core principle:** the orchestrator never trusts a sub-agent's "all green". It checks the
-scenario ledger, then runs analyze and tests itself after every layer.
-
-**TDD is a loop, not a phase.** Inside a layer, every scenario goes through
-RED -> GREEN -> REFACTOR before the next scenario starts. The slice file is the ledger that
-proves it.
-
-## When to Use
-
-Use it whenever the user:
-- asks to implement or build a Flutter feature from a spec;
-- says "build the feature", "implement the spec" or "continue the feature build";
-- wants to resume a partly built feature.
-
-Use it even if the user does not mention TDD or layers. If there is no approved spec yet,
-use `feature-spec` first.
-
-## Preconditions (check first, stop if any fails)
-
-1. `specs/FEATURE.spec.yaml` exists and parses as YAML.
-2. `status: approved`. If it is `draft`, stop and send the user back to `feature-spec`.
-   Do not "just start".
-3. No `open_questions` block a component you are about to build. If one does, stop and ask.
-4. Read `build:` in the spec and skip layers already marked `done`, so an interrupted
-   build resumes. If a layer is not `done` but its slice file exists, resume from the slice:
-   the first scenario whose status is not `refactored` is where work continues.
-
-## Order and Gates
+Router and finisher for building a Flutter feature from an approved spec. It never writes
+production or test code. Each layer is built by its own skill, **in its own chat session**, so
+no session accumulates the history of the others.
 
 ```
 design_system -> domain -> data -> presentation
 ```
 
-`design_system` depends on nothing else and may run in parallel with `domain`. It must be
-`done` before `presentation` starts. For design_system, load `figma-to-flutter` and follow
-it (skip if the spec adds no new tokens or shared widgets).
+`design_system` may run before or in parallel with `domain`. It must be `done` or `skipped`
+before `presentation`.
 
-For each layer:
+## When to Use
 
-1. **Slice.** Extract only that layer's section of the spec: its components, their
-   scenarios, and the fakes those scenarios need. Copy each scenario exactly as the spec has
-   it and add `status: pending` to every one. Write it to `specs/FEATURE.LAYER.slice.yaml`.
-   The slice is the execution ledger; the spec itself never gets scenario statuses.
+Use it when the user says "build the feature", "implement the spec", "continue the feature build",
+or asks what to do next. If there is no approved spec, use `feature-spec` first.
 
-   ```yaml
-   layer: domain
-   components:
-     - name: GetOrders
-       scenarios:
-         - id: GO-1
-           # ...the scenario exactly as in the spec...
-           status: pending   # pending -> red -> green -> refactored
-         - id: GO-2
-           status: pending
-   ```
+## Steps
 
-2. **Delegate.** Dispatch one sub-agent per layer (see Delegation below) with the matching
-   layer guide from the end of this skill pasted into its context.
-3. **Check the ledger.** When the sub-agent returns, before running any command:
-   - every scenario in the slice has `status: refactored`;
-   - the report lists, for every scenario, the one-line failing output from its RED step;
-   - scenarios added beyond the slice are in the ledger too, with the same evidence.
+1. Check `specs/FEATURE.spec.yaml`: it exists, parses as YAML and has `status: approved`.
+   If it is `draft`, stop and send the user to `feature-spec`.
+2. Read `build:`. Each layer is `pending`, `done` or `skipped` (`design_system` only).
+3. If a slice file `specs/FEATURE.LAYER.slice.yaml` exists for a layer that is not `done`, say
+   which scenario is the first not `refactored`: that layer is resumable.
+4. Tell the user the next skill and to start a new chat session for it:
 
-   A missing status, a missing failing-output line, or a report that describes tests written
-   "together" or "in a batch" means the layer is **rejected**. Do not run the gate. Go to
-   "Rejected layers" below.
-4. **Gate.** Run the checks yourself with the terminal tool: `flutter analyze` and
-   `flutter test test/features/FEATURE/LAYER`, plus
-   `dart run build_runner build --delete-conflicting-outputs` after DTO work.
-5. **Record.** If green, set that layer to `done` under `build:` in the spec. Touch no
-   other part of the spec.
-6. **Stop on red.** If analyze or tests fail and the layer cannot fix it in a few
-   attempts, stop, show the failure, and ask the user. Never move past red.
+| Next pending layer | Skill |
+|---|---|
+| design_system | `feature-design-system` |
+| domain | `feature-domain` |
+| data | `feature-data` (needs domain `done`) |
+| presentation | `feature-presentation` (needs domain and design_system `done` or `skipped`) |
 
-### Rejected layers
-
-If the ledger check fails because the sub-agent batched (several tests at once, statuses
-filled in afterwards, no failing output recorded):
-
-1. Keep what is useful but reset the slice: statuses back to `pending` for every scenario
-   that lacks a recorded RED, and tell the sub-agent to delete the tests and code for those
-   scenarios.
-2. Re-delegate with a **one-scenario slice**: write only the next pending scenario into the
-   slice file the sub-agent sees, and dispatch again after each scenario returns
-   `refactored`. A sub-agent cannot batch scenarios it cannot see.
-3. If it batches again, work one component per delegation, then one scenario per
-   delegation. Say in the report that you had to.
-
-### Delegation
-
-The sub-agent may never read the `test-driven-development` skill, so the loop is written
-out here and must be pasted in full.
-
-```python
-delegate_task(
-    goal="Implement the LAYER layer of FEATURE using strict TDD with Fakes, one scenario at a time",
-    context="""
-    Read the spec slice at specs/FEATURE.LAYER.slice.yaml. It is your ledger.
-    Also follow the flutter-clean-architecture skill.
-
-    LOOP (repeat per scenario, one at a time, in slice order):
-    1. Take the first scenario with status: pending. At most ONE scenario may be
-       red or green at any moment.
-    2. Write exactly ONE test for it. Run it. It must fail on the assertion
-       (a compile error for a brand-new unit is the first RED: create only the minimal stubs,
-       then run again until it fails on the assertion).
-       Set status: red in the slice file and keep the one-line failing output.
-    3. Write the minimal code to pass (hardcoding is allowed). Run that test.
-       Set status: green.
-    4. Run the layer's tests. Refactor THIS scenario's code now. Run the layer's tests again.
-       Set status: refactored.
-    5. Only then start the next scenario.
-    Never write a second test while a scenario is red or green. Never refactor "later".
-    Update a status right after the test run that justifies it, never in bulk.
-    Code written before its test must be deleted.
-
-    Fakes: hand-written, in test/fakes/, created only when a scenario needs them.
-    No mock packages. Names: nouns for query methods, no type names ending in er/or.
-
-    LAYER GUIDE:
-    [paste the matching "Layer Guide" section from the feature-build skill]
-
-    Project test command: flutter test test/features/FEATURE/LAYER
-    REPORT: for every scenario, its id, final status and the one-line failing output from
-    step 2; then scenarios added beyond the slice (same evidence), fakes created, anything unclear.
-    """,
-    toolsets=['terminal', 'file']
-)
-```
-
-Give each sub-agent only its slice and its own layer guide, never the whole spec or the
-other layers' guides.
-
-## TDD with Fakes (applies to every layer)
-
-The build order is inside-out, but each unit is still tested London School style: in
-isolation, against **Fakes of its direct collaborators**.
-
-- Use cases against `FakeRepository`.
-- Repository implementations against a fake data source.
-- Data sources against `FakeAppHttpClient`.
-- State holders against fake use cases.
-- Views against a fake state holder inside a `BlocProvider`.
-
-**Cycle.** The loop in the Delegation block above is the only definition of the cycle, and
-`test-driven-development` explains the reasoning. Vertical slices only: one scenario goes
-through RED, GREEN and REFACTOR before the next begins.
-
-**Fakes.**
-- Live in `test/fakes/NAME.dart`, one class per file, `final class FakeName implements Interface`.
-  Every interface is an `abstract interface class`, so `implements` always works.
-- Create a fake only when the first scenario needs it, with only the behaviors that scenario
-  needs. Grow it scenario by scenario, within the contract listed under `fakes:` in the spec.
-- Seed data through constructor parameters. Configure failure through a constructor
-  parameter or a settable noun-named field (`failure`, `exception`), not a verb method.
-- Expose what it recorded through noun getters (`requests`, `callCount`, `savedNotes`).
-- Assert on outcomes and on what the fake recorded. Do not use mocking packages
-  (`mockito`, `mocktail`) and do not use interaction expectations.
-- A fake contains no logic beyond what a scenario needs. If a fake gets clever, simplify it.
-- If `contract_tests: true`, write one shared test suite per repository interface and run it
-  against both the fake and the real implementation (real one over a fake HTTP client), so the
-  fake cannot drift.
-
-**Scenarios are a minimum.** If a layer discovers a missing edge case, it adds the scenario
-to the slice ledger as `pending` (next id in the sequence, for example `GO-4`), runs the loop
-for it like any other, and reports it. After the layer passes the gate, add it to the spec
-under that component.
-
-## Project Rules
-
-- Folder structure, class modifiers, error pipeline and DI: follow
-  `flutter-clean-architecture`. Do not restate or override it.
-- Design tokens and shared widgets: follow `figma-to-flutter`. No hardcoded colors, radii,
-  spacing, paddings, text styles or asset paths in widgets.
-- Naming: query methods and getters are nouns (`orders`, `label`); type names do not end in
-  "er" or "or". Where the architecture skill's examples use a verb-named method (for example
-  `toDomainModel`), apply the noun rule (`domainModel`) unless the codebase already uses the
-  other form.
-- Production code is never written without a failing test first. Generated code
-  (`*.g.dart`) and the `FeaturePage` DI wiring are the only exceptions; cover the wiring
-  through the view and state holder tests.
-
-## Layer Guide: domain
-
-Input: the spec's `domain:` section and the `fakes:` entries for repository interfaces.
-Output: `lib/features/FEATURE/domain/` and `test/features/FEATURE/domain/`.
-Pure Dart: no Flutter UI, no networking packages, no imports from `data/` or `presentation/`.
-
-Build:
-1. **Failures**: reuse `core/error/failures.dart` entries marked `reuse: true`. Add new ones as
-   `final class X extends Failure`.
-2. **Models**: immutable `final class` entities, `const` constructors, no JSON logic, nullability
-   exactly as the spec says. Add a dedicated test only if a model has logic (equality, derived
-   getters); otherwise the use case tests cover it.
-3. **Repository contracts**: `abstract interface class` with the spec's methods. Create them when
-   the first use case test needs them; the compile error is the expected RED.
-4. **Use cases**: `final class` with a `call()` method delegating to the repository.
-
-For each use case, run the loop once per scenario, in order. For the first scenario, the test
-needs the use case, the repository contract and `FakeRepository`: create only what fails to
-compile, minimally, then continue the loop at the assertion failure. After GREEN, run the use
-case tests, then the domain folder, then refactor that scenario's code before the next scenario.
-
-Done when: every domain scenario is `refactored`, `flutter analyze` is clean for `domain/`, and
-`grep -rnE "package:flutter|dio|http|data/|presentation/" lib/features/FEATURE/domain/` is empty.
-
-## Layer Guide: data
-
-Input: the spec's `data:` section, the finished domain contracts, and the `fakes:` entries for
-`AppHttpClient` and data sources.
-Output: `lib/features/FEATURE/data/` and `test/features/FEATURE/data/`. Domain must be `done`.
-
-Build bottom-up so each unit is tested against a fake of what it calls: DTOs, then data sources,
-then repository implementations. Run the loop once per scenario for each unit, in slice order.
-
-**DTOs** (`data/models/`): `@JsonSerializable()` `final class` with `part 'NAME.g.dart'`, fields
-and nullability exactly as the spec. Never parse JSON by hand. Expose the conversion to the
-domain model as a noun-named member (`domainModel`) unless the codebase uses `toDomainModel`.
-Scenarios feed real JSON maps (no fake needed), parse with `fromJson`, convert, and assert on the
-domain model. Run `build_runner` as soon as the annotated class exists.
-
-**Data sources** (`data/datasources/`, or `data/services/` for action-oriented gateways):
-`abstract interface class` contract plus a `final class` implementation depending only on
-`AppHttpClient`. Wrap calls in `try/catch` and throw the exceptions in the spec's `status_map`
-(from `core/error/exceptions.dart`). Return DTOs, never domain models. Endpoint method and path
-come from the spec. One `status_map` entry per scenario, success first: build `FakeAppHttpClient`
-to answer with the scenario's status and body, call the data source, assert on the returned DTOs
-or the thrown exception, and on `FakeAppHttpClient.requests` when the request shape is the
-behavior. Add a small `RecordedRequest` value class to `test/fakes/` only when a scenario needs
-it. If the shared client contract lacks a method a scenario needs, stop and ask; changing
-`core/` is outside this layer.
-
-**Repository implementations** (`data/repositories/`): `final class` implementing the domain
-repository over the data source contract. Catch the data source exceptions, convert DTOs to
-domain models, return `Either<Failure, T>`, and implement exactly the spec's
-`exception_to_failure` table. Scenarios use a fake data source seeded with DTOs or set to throw;
-assert on the returned `Either`. For streams, assert that errors arrive as `Left` and the stream
-stays alive. With `contract_tests: true`, keep the shared suite green on both fake and real; a
-scenario that passes on the real one but not the fake means the fake drifted.
-
-Done when: every data scenario is `refactored`, `*.g.dart` files are generated and not
-hand-edited, `flutter analyze` is clean for `data/`, and `data/` imports nothing from
-`presentation/`.
-
-## Layer Guide: presentation
-
-Input: the spec's `presentation:` and `ui:` sections, the finished use cases, and the design
-system from `figma-to-flutter`.
-Output: `lib/features/FEATURE/presentation/` and `test/features/FEATURE/presentation/`.
-Domain and design system must be `done`. This layer touches data only in the page wiring.
-
-Build order: state holders, then views and feature widgets, then page wiring. Run the loop
-once per scenario for each state holder and each view, in slice order.
-
-**State holders** (`presentation/blocs/`): `sealed class` state (and events for a Bloc) with
-`final class` subtypes exactly as the spec lists. The state holder is a `final class` receiving
-use cases through its constructor; it calls only use cases, never repositories. Scenarios use
-`blocTest` (or plain stream expectations) with fake use cases and assert on the emitted state
-sequence and on what the fake recorded. If the use case is a concrete `final class`, it cannot be
-faked with `implements`; follow the spec's `fakes:` list, or if it names no fake, build the real
-use case over `FakeRepository`. Do not decide silently: say which you chose in the report.
-
-**Views and feature widgets** (`presentation/widgets/`): shared widgets come from
-`design_system/widgets/`; feature-specific ones live here. `FeatureView` switches exhaustively
-over the sealed state. Widget tests pump `FeatureView` inside a `BlocProvider` holding a fake
-state holder; never pump `FeaturePage`. Assert on what the user sees and, for actions, on what
-the fake state holder recorded. If the state holder is a `final class`, it cannot be faked from
-another library: use the real state holder over fake use cases and say so in the report. Do not
-weaken the class modifiers to make a fake easier. Use design tokens only, and add `Semantics` to
-meaningful icons and images.
-
-**Page wiring** (`presentation/pages/`): `FeaturePage` composes the dependency graph inside
-`BlocProvider` (data source, repository implementation, use cases, state holder), resolves
-shared dependencies through `GetIt.I`, and returns `FeatureView`. It has no dedicated test;
-confirm it compiles, passes `flutter analyze`, and that route registration (if the spec mentions
-one) is in place.
-
-Fidelity check after the scenarios pass: compare the screen with the Figma screenshot or the
-supplied screenshot (layout, spacing, colors, typography, radii) as `figma-to-flutter` Step 6
-describes, and list any differences in the report.
-
-Done when: every presentation scenario is `refactored`, `flutter analyze` is clean for
-`presentation/`, no state holder imports a repository, data source or service, and
-`FeatureView` is not in `pages/`.
+5. Stop. Do not start the layer in this session.
 
 ## Finishing
 
-When all layers are `done`:
+When every layer is `done` (or `skipped`):
 1. Run `dart format .`, `flutter analyze` and the full `flutter test`.
 2. Run the dependency check from `figma-to-flutter` on `lib/design_system/`.
-3. Report: layers built, scenarios implemented per component, scenarios added beyond the spec,
-   fakes created, layers that had to be rejected and re-run, anything the user should review.
+3. Read each `specs/FEATURE.LAYER.slice.yaml` and report: layers built, scenarios implemented per
+   component, scenarios added beyond the spec, fakes created, layers that had to be redone, and
+   anything the user should review.
 
 ## Common Mistakes
 
+- Starting a layer inside the router session.
 - Starting from a draft spec.
-- Giving a sub-agent the whole spec or the other layers' guides.
-- Writing all of a layer's tests first, then all of its code.
-- Making all tests green and refactoring once at the end of the layer.
-- Pasting the delegation without the full loop, or only telling the sub-agent to "follow TDD".
-- Accepting a layer without checking that every scenario is `refactored` with a recorded RED.
-- Putting scenario statuses in the spec instead of the slice.
-- Trusting a sub-agent's "all green" without running analyze and tests.
-- A fake that mirrors the real implementation's logic.
-- Using a mock package "just for this one test".
-- Editing spec sections other than `build:` and added scenarios.
+- Skipping the finishing checks.
+- Editing the spec beyond reading `build:`.
